@@ -1,47 +1,84 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class PlayerController : MonoBehaviour
 {
     public float moveSpeed = 5f;
+    public float jumpForce = 5f;
     public float headBobStrength = 0.1f;
-    public AudioClip stepSound;
+    public AudioClip[] stepSounds;
+    public AudioClip jumpSound;
     public float stepDistance = 0.5f;
-    
-    private CharacterController characterController;
-    private Camera mainCamera;
+    public float groundCheckDistance = 0.2f;
+    public LayerMask groundMask;
+
+    public float maxHP = 100f;
+    public float currentHP;
+    public float healingRate = 1.5f;
+    private float lastDamageTime;
+    public float maxSunResistance = 10f;
+    public float currentSunResistance;
+    public float sunResistanceDepletionRate = 2f;
+    public float sunResistanceRegenRate = 2f;
+    private bool isInShadow;
+    public GameObject sun;
+    public LayerMask raycastIgnoreMask;
+
+    private Rigidbody rb;
     private AudioSource audioSource;
     private Vector3 previousPosition;
     private float distanceTraveled;
+    private bool isGrounded;
 
     private float headBobTimer = 0f;
     private bool isHeadBobUp = true;
 
     void Start()
     {
-        characterController = GetComponent<CharacterController>();
-        mainCamera = Camera.main;
+        rb = GetComponent<Rigidbody>();
         audioSource = gameObject.AddComponent<AudioSource>();
-        audioSource.clip = stepSound;
         previousPosition = transform.position;
+
+        rb.drag = 5f;
+        rb.freezeRotation = true;
+
+        currentHP = maxHP;
+        currentSunResistance = maxSunResistance;
+        lastDamageTime = Time.time;
     }
 
     void Update()
     {
         MovePlayer();
-        HeadBobEffect();
         PlayStepSound();
+
+        HPManagement();
+        SunResistanceManagement();
+    }
+
+    void FixedUpdate()
+    {
+        HeadBobEffect();
     }
 
     void MovePlayer()
     {
-        float moveDirectionY = characterController.velocity.y;
+        GroundCheck();
 
-        Vector3 move = new Vector3(Input.GetAxis("Horizontal"), 0, Input.GetAxis("Vertical"));
-        move = transform.TransformDirection(move) * moveSpeed;
+        float moveHorizontal = Input.GetAxis("Horizontal");
+        float moveVertical = Input.GetAxis("Vertical");
 
-        move.y = moveDirectionY;
+        Vector3 move = transform.right * moveHorizontal + transform.forward * moveVertical;
+        move = move.normalized * moveSpeed;
 
-        characterController.Move(move * Time.deltaTime);
+        Vector3 newVelocity = new Vector3(move.x, rb.velocity.y, move.z);
+        rb.velocity = newVelocity;
+
+        if (Input.GetButtonDown("Jump") && isGrounded)
+        {
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+            audioSource.PlayOneShot(jumpSound);
+        }
 
         distanceTraveled += Vector3.Distance(transform.position, previousPosition);
         previousPosition = transform.position;
@@ -49,7 +86,7 @@ public class PlayerController : MonoBehaviour
 
     void HeadBobEffect()
     {
-        if (characterController.velocity.magnitude > 0.1f)
+        if (rb.velocity.magnitude > 0.1f && isGrounded)
         {
             headBobTimer += Time.deltaTime * (isHeadBobUp ? 1 : -1);
 
@@ -62,18 +99,96 @@ public class PlayerController : MonoBehaviour
                 isHeadBobUp = true;
             }
 
-            Vector3 cameraPosition = mainCamera.transform.localPosition;
+            Vector3 cameraPosition = Camera.main.transform.localPosition;
             cameraPosition.y = Mathf.Lerp(cameraPosition.y, headBobTimer, Time.deltaTime * 10f);
-            mainCamera.transform.localPosition = cameraPosition;
+            Camera.main.transform.localPosition = cameraPosition;
         }
     }
 
     void PlayStepSound()
     {
-        if (distanceTraveled >= stepDistance)
+        if (distanceTraveled >= stepDistance && isGrounded)
         {
-            audioSource.Play();
+            if (stepSounds.Length > 0)
+            {
+                audioSource.PlayOneShot(stepSounds[Random.Range(0, stepSounds.Length)]);
+            }
             distanceTraveled = 0f;
         }
+    }
+
+    void GroundCheck()
+    {
+        isGrounded = Physics.Raycast(transform.position, Vector3.down, groundCheckDistance, groundMask);
+    }
+
+    void HPManagement()
+    {
+        if (Time.time - lastDamageTime >= 10f && currentHP < maxHP)
+        {
+            currentHP += healingRate * Time.deltaTime;
+            currentHP = Mathf.Clamp(currentHP, 0f, maxHP);
+        }
+    }
+
+    void SunResistanceManagement()
+    {
+        RaycastHit hit;
+        if (Physics.Raycast(transform.position, sun.transform.position - transform.position, out hit, Mathf.Infinity, ~raycastIgnoreMask))
+        {
+            if (hit.collider.gameObject == sun)
+            {
+                isInShadow = false;
+                currentSunResistance -= sunResistanceDepletionRate * Time.deltaTime;
+
+                if (currentSunResistance <= 0)
+                {
+                    GameOver();
+                }
+            }
+            else
+            {
+                isInShadow = true;
+                currentSunResistance += sunResistanceRegenRate * Time.deltaTime;
+                currentSunResistance = Mathf.Clamp(currentSunResistance, 0f, maxSunResistance);
+            }
+        }
+        else
+        {
+            isInShadow = true;
+            currentSunResistance += sunResistanceRegenRate * Time.deltaTime;
+            currentSunResistance = Mathf.Clamp(currentSunResistance, 0f, maxSunResistance);
+        }
+    }
+
+    void OnTriggerEnter(Collider other)
+    {
+        if (other.CompareTag("Shadow"))
+        {
+            isInShadow = true;
+        }
+    }
+
+    void OnTriggerExit(Collider other)
+    {
+        if (other.CompareTag("Shadow"))
+        {
+            isInShadow = false;
+        }
+    }
+
+    public void TakeDamage(float damage)
+    {
+        currentHP -= damage;
+        lastDamageTime = Time.time;
+        if (currentHP <= 0)
+        {
+            GameOver();
+        }
+    }
+
+    void GameOver()
+    {
+        SceneManager.LoadScene("GameOver");
     }
 }
